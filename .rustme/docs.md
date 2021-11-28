@@ -1,5 +1,3 @@
-# Circulate
-
 [![crate version](https://img.shields.io/crates/v/circulate.svg)](https://crates.io/crates/circulate)
 [![Live Build Status](https://img.shields.io/github/workflow/status/khonsulabs/circulate/Tests/main)](https://github.com/khonsulabs/circulate/actions?query=workflow:Tests)
 [![Documentation for `main` branch](https://img.shields.io/badge/docs-main-informational)](https://khonsulabs.github.io/circulate/main/circulate/)
@@ -23,11 +21,3 @@ println!(
     message.payload::<AnySerializableType>()?
 );
 ```
-
-## Open-source Licenses
-
-This project, like all projects from [Khonsu Labs](https://khonsulabs.com/), are
-open-source. This repository is available under the [MIT License](./LICENSE-MIT)
-or the [Apache License 2.0](./LICENSE-APACHE).
-
-To learn more about contributing, please see [CONTRIBUTING.md](./CONTRIBUTING.md).

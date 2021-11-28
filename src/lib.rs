@@ -1,5 +1,4 @@
-//! Lightweight async `PubSub` framework.
-
+#![doc = include_str!("../.rustme/docs.md")]
 #![forbid(unsafe_code)]
 #![warn(
     clippy::cargo,
