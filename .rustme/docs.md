@@ -7,6 +7,10 @@ Circulate is a lightweight async [PubSub](https://en.wikipedia.org/wiki/Publish%
 This project is written for [BonsaiDb](https://github.com/khonsulabs/bonsaidb). However, it's a general-purpose PubSub implementation that can be utilized in any tokio-based Rust codebase.
 
 ```rust
+# #[derive(serde::Serialize, serde::Deserialize, Debug)]
+# struct AnySerializableType;
+# async fn example() -> Result<(), anyhow::Error> {
+# use circulate::Relay;
 let relay = Relay::default();
 let subscriber = relay.create_subscriber().await;
 
@@ -20,4 +24,6 @@ println!(
     message.topic, 
     message.payload::<AnySerializableType>()?
 );
+# Ok(())
+# }
 ```
