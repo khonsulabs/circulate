@@ -20,6 +20,7 @@ use std::{
     },
 };
 
+use arc_bytes::OwnedBytes;
 use async_lock::RwLock;
 pub use flume;
 use serde::{Deserialize, Serialize};
@@ -30,7 +31,7 @@ pub struct Message {
     /// The topic of the message.
     pub topic: String,
     /// The payload of the message.
-    pub payload: Vec<u8>,
+    pub payload: OwnedBytes,
 }
 
 impl Message {
@@ -40,10 +41,15 @@ impl Message {
     ///
     /// Returns an error if `payload` fails to serialize with `pot`.
     pub fn new<S: Into<String>, P: Serialize>(topic: S, payload: &P) -> Result<Self, pot::Error> {
-        Ok(Self {
+        Ok(Self::raw(topic, pot::to_vec(payload)?))
+    }
+
+    /// Creates a new message with a raw payload.
+    pub fn raw<S: Into<String>, B: Into<OwnedBytes>>(topic: S, payload: B) -> Self {
+        Self {
             topic: topic.into(),
-            payload: pot::to_vec(payload)?,
-        })
+            payload: payload.into(),
+        }
     }
 
     /// Deserialize the payload as `P` using `pot`.
@@ -51,7 +57,7 @@ impl Message {
     /// # Errors
     ///
     /// Returns an error if `payload` fails to deserialize with `pot`.
-    pub fn payload<P: for<'de> Deserialize<'de>>(&self) -> Result<P, pot::Error> {
+    pub fn payload<'a, P: Deserialize<'a>>(&'a self) -> Result<P, pot::Error> {
         pot::from_slice(&self.payload).map_err(pot::Error::from)
     }
 }
@@ -114,6 +120,16 @@ impl Relay {
     }
 
     /// Publishes a `payload` to all subscribers of `topic`.
+    pub async fn publish_raw<S: Into<String> + Send, P: Into<OwnedBytes> + Send>(
+        &self,
+        topic: S,
+        payload: P,
+    ) {
+        let message = Message::raw(topic, payload);
+        self.publish_message(message).await;
+    }
+
+    /// Publishes a `payload` to all subscribers of `topic`.
     ///
     /// # Errors
     ///
@@ -133,7 +149,12 @@ impl Relay {
     }
 
     /// Publishes a `payload` to all subscribers of `topic`.
-    pub async fn publish_serialized_to_all(&self, topics: Vec<String>, payload: Vec<u8>) {
+    pub async fn publish_raw_to_all(
+        &self,
+        topics: Vec<String>,
+        payload: impl Into<OwnedBytes> + Send,
+    ) {
+        let payload = payload.into();
         let tasks = topics.into_iter().map(|topic| {
             self.publish_message(Message {
                 topic,
