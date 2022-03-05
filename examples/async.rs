@@ -7,9 +7,9 @@ use tokio::time::sleep;
 async fn main() -> anyhow::Result<()> {
     let relay = Relay::default();
 
-    let subscriber = relay.create_subscriber().await;
+    let subscriber = relay.create_subscriber();
     // Subscribe for messages sent to the topic "pong"
-    subscriber.subscribe_to("pong").await;
+    subscriber.subscribe_to("pong");
 
     // Launch a task that sends out "ping" messages.
     tokio::spawn(pinger(relay.clone()));
@@ -40,15 +40,15 @@ async fn pinger(pubsub: Relay) -> anyhow::Result<()> {
     loop {
         ping_count += 1;
         println!("-> Sending ping {}", ping_count);
-        pubsub.publish("ping", &ping_count).await?;
+        pubsub.publish("ping", &ping_count)?;
         sleep(Duration::from_millis(250)).await;
     }
 }
 
 async fn ponger(pubsub: Relay) -> anyhow::Result<()> {
     const NUMBER_OF_PONGS: usize = 5;
-    let subscriber = pubsub.create_subscriber().await;
-    subscriber.subscribe_to("ping").await;
+    let subscriber = pubsub.create_subscriber();
+    subscriber.subscribe_to("ping");
     let mut pings_remaining = NUMBER_OF_PONGS;
 
     println!(
@@ -64,7 +64,7 @@ async fn ponger(pubsub: Relay) -> anyhow::Result<()> {
             message.payload::<u32>()?
         );
         pings_remaining -= 1;
-        pubsub.publish("pong", &pings_remaining).await?;
+        pubsub.publish("pong", &pings_remaining)?;
     }
 
     println!("Ponger finished.");

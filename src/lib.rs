@@ -21,8 +21,8 @@ use std::{
 };
 
 use arc_bytes::OwnedBytes;
-use async_lock::RwLock;
 pub use flume;
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
 /// A `PubSub` message.
@@ -82,8 +82,8 @@ struct Data {
 
 impl Relay {
     /// Create a new [`Subscriber`] for this relay.
-    pub async fn create_subscriber(&self) -> Subscriber {
-        let mut subscribers = self.data.subscribers.write().await;
+    pub fn create_subscriber(&self) -> Subscriber {
+        let mut subscribers = self.data.subscribers.write();
         let id = self.data.last_subscriber_id.fetch_add(1, Ordering::SeqCst);
         let (sender, receiver) = flume::unbounded();
         subscribers.insert(
@@ -98,8 +98,6 @@ impl Relay {
                 id,
                 receiver,
                 relay: self.clone(),
-                #[cfg(not(target_arch = "wasm32"))]
-                tokio: tokio::runtime::Handle::current(),
             }),
         }
     }
@@ -109,24 +107,24 @@ impl Relay {
     /// # Errors
     ///
     /// Returns an error if `payload` fails to serialize with `pot`.
-    pub async fn publish<S: Into<String> + Send, P: Serialize + Sync>(
+    pub fn publish<S: Into<String> + Send, P: Serialize + Sync>(
         &self,
         topic: S,
         payload: &P,
     ) -> Result<(), pot::Error> {
         let message = Message::new(topic, payload)?;
-        self.publish_message(message).await;
+        self.publish_message(message);
         Ok(())
     }
 
     /// Publishes a `payload` to all subscribers of `topic`.
-    pub async fn publish_raw<S: Into<String> + Send, P: Into<OwnedBytes> + Send>(
+    pub fn publish_raw<S: Into<String> + Send, P: Into<OwnedBytes> + Send>(
         &self,
         topic: S,
         payload: P,
     ) {
         let message = Message::raw(topic, payload);
-        self.publish_message(message).await;
+        self.publish_message(message);
     }
 
     /// Publishes a `payload` to all subscribers of `topic`.
@@ -134,16 +132,15 @@ impl Relay {
     /// # Errors
     ///
     /// Returns an error if `payload` fails to serialize with `pot`.
-    pub async fn publish_to_all<P: Serialize + Sync>(
+    pub fn publish_to_all<P: Serialize + Sync>(
         &self,
         topics: Vec<String>,
         payload: &P,
     ) -> Result<(), pot::Error> {
-        let tasks = topics
+        topics
             .into_iter()
             .map(|topic| Message::new(topic, payload).map(|message| self.publish_message(message)))
             .collect::<Result<Vec<_>, _>>()?;
-        futures::future::join_all(tasks).await;
 
         Ok(())
     }
@@ -155,26 +152,25 @@ impl Relay {
         payload: impl Into<OwnedBytes> + Send,
     ) {
         let payload = payload.into();
-        let tasks = topics.into_iter().map(|topic| {
+        for topic in topics {
             self.publish_message(Message {
                 topic,
                 payload: payload.clone(),
-            })
-        });
-        futures::future::join_all(tasks).await;
-    }
-
-    /// Publishes a message to all subscribers of its topic.
-    pub async fn publish_message(&self, message: Message) {
-        if let Some(topic_id) = self.topic_id(&message.topic).await {
-            self.post_message_to_topic(message, topic_id).await;
+            });
         }
     }
 
-    async fn add_subscriber_to_topic(&self, subscriber_id: u64, topic: String) {
-        let mut subscribers = self.data.subscribers.write().await;
-        let mut topics = self.data.topics.write().await;
-        let mut subscriptions = self.data.subscriptions.write().await;
+    /// Publishes a message to all subscribers of its topic.
+    pub fn publish_message(&self, message: Message) {
+        if let Some(topic_id) = self.topic_id(&message.topic) {
+            self.post_message_to_topic(message, topic_id);
+        }
+    }
+
+    fn add_subscriber_to_topic(&self, subscriber_id: u64, topic: String) {
+        let mut subscribers = self.data.subscribers.write();
+        let mut topics = self.data.topics.write();
+        let mut subscriptions = self.data.subscriptions.write();
 
         // Lookup or create a topic id
         let topic_id = *topics
@@ -189,9 +185,9 @@ impl Relay {
         subscribers.insert(subscriber_id);
     }
 
-    async fn remove_subscriber_from_topic(&self, subscriber_id: u64, topic: &str) {
-        let mut subscribers = self.data.subscribers.write().await;
-        let mut topics = self.data.topics.write().await;
+    fn remove_subscriber_from_topic(&self, subscriber_id: u64, topic: &str) {
+        let mut subscribers = self.data.subscribers.write();
+        let mut topics = self.data.topics.write();
 
         let remove_topic = if let Some(topic_id) = topics.get(topic) {
             if let Some(subscriber) = subscribers.get_mut(&subscriber_id) {
@@ -204,7 +200,7 @@ impl Relay {
                 return;
             }
 
-            let mut subscriptions = self.data.subscriptions.write().await;
+            let mut subscriptions = self.data.subscriptions.write();
             let remove_topic = if let Some(subscriptions) = subscriptions.get_mut(topic_id) {
                 subscriptions.remove(&subscriber_id);
                 subscriptions.is_empty()
@@ -227,30 +223,33 @@ impl Relay {
         }
     }
 
-    async fn topic_id(&self, topic: &str) -> Option<TopicId> {
-        let topics = self.data.topics.read().await;
+    fn topic_id(&self, topic: &str) -> Option<TopicId> {
+        let topics = self.data.topics.read();
         topics.get(topic).copied()
     }
 
-    async fn post_message_to_topic(&self, message: Message, topic: TopicId) {
+    fn post_message_to_topic(&self, message: Message, topic: TopicId) {
         let failures = {
             // For an optimal-flow case, we're going to acquire read permissions
             // only, allowing messages to be posted in parallel. This block is
             // responsible for returning `SubscriberId`s that failed to send.
-            let subscribers = self.data.subscribers.read().await;
-            let subscriptions = self.data.subscriptions.read().await;
+            let subscribers = self.data.subscribers.read();
+            let subscriptions = self.data.subscriptions.read();
             if let Some(registered) = subscriptions.get(&topic) {
                 let message = Arc::new(message);
-                let failures = futures::future::join_all(registered.iter().filter_map(|id| {
-                    subscribers.get(id).map(|subscriber| {
-                        let message = message.clone();
-                        async move { (*id, subscriber.sender.send_async(message).await.is_ok()) }
+                let failures = registered
+                    .iter()
+                    .filter_map(|id| {
+                        subscribers.get(id).and_then(|subscriber| {
+                            let message = message.clone();
+                            if subscriber.sender.send(message).is_ok() {
+                                None
+                            } else {
+                                Some(*id)
+                            }
+                        })
                     })
-                }))
-                .await
-                .into_iter()
-                .filter_map(|(id, sent_message)| if sent_message { None } else { Some(id) })
-                .collect::<Vec<SubscriberId>>();
+                    .collect::<Vec<SubscriberId>>();
 
                 failures
             } else {
@@ -260,15 +259,15 @@ impl Relay {
 
         if !failures.is_empty() {
             for failed in failures {
-                self.unsubscribe_all(failed).await;
+                self.unsubscribe_all(failed);
             }
         }
     }
 
-    async fn unsubscribe_all(&self, subscriber_id: SubscriberId) {
-        let mut subscribers = self.data.subscribers.write().await;
-        let mut topics = self.data.topics.write().await;
-        let mut subscriptions = self.data.subscriptions.write().await;
+    fn unsubscribe_all(&self, subscriber_id: SubscriberId) {
+        let mut subscribers = self.data.subscribers.write();
+        let mut topics = self.data.topics.write();
+        let mut subscriptions = self.data.subscriptions.write();
         if let Some(subscriber) = subscribers.remove(&subscriber_id) {
             for topic in &subscriber.topics {
                 let remove = if let Some(subscriptions) = subscriptions.get_mut(topic) {
@@ -295,25 +294,24 @@ struct SubscriberInfo {
 
 /// A subscriber for [`Message`]s published to subscribed topics.
 #[derive(Debug, Clone)]
+#[must_use]
 pub struct Subscriber {
     data: Arc<SubscriberData>,
 }
 
 impl Subscriber {
     /// Subscribe to [`Message`]s published to `topic`.
-    pub async fn subscribe_to<S: Into<String> + Send>(&self, topic: S) {
+    pub fn subscribe_to<S: Into<String> + Send>(&self, topic: S) {
         self.data
             .relay
-            .add_subscriber_to_topic(self.data.id, topic.into())
-            .await;
+            .add_subscriber_to_topic(self.data.id, topic.into());
     }
 
     /// Unsubscribe from [`Message`]s published to `topic`.
-    pub async fn unsubscribe_from(&self, topic: &str) {
+    pub fn unsubscribe_from(&self, topic: &str) {
         self.data
             .relay
-            .remove_subscriber_from_topic(self.data.id, topic)
-            .await;
+            .remove_subscriber_from_topic(self.data.id, topic);
     }
 
     /// Returns the receiver to receive [`Message`]s.
@@ -334,21 +332,11 @@ struct SubscriberData {
     id: SubscriberId,
     relay: Relay,
     receiver: flume::Receiver<Arc<Message>>,
-    #[cfg(not(target_arch = "wasm32"))]
-    tokio: tokio::runtime::Handle,
 }
 
 impl Drop for SubscriberData {
     fn drop(&mut self) {
-        let id = self.id;
-        let relay = self.relay.clone();
-        let drop_task = async move {
-            relay.unsubscribe_all(id).await;
-        };
-        #[cfg(target_arch = "wasm32")]
-        wasm_bindgen_futures::spawn_local(drop_task);
-        #[cfg(not(target_arch = "wasm32"))]
-        self.tokio.spawn(drop_task);
+        self.relay.unsubscribe_all(self.id);
     }
 }
 
@@ -359,9 +347,9 @@ mod tests {
     #[tokio::test]
     async fn simple_pubsub_test() -> anyhow::Result<()> {
         let pubsub = Relay::default();
-        let subscriber = pubsub.create_subscriber().await;
-        subscriber.subscribe_to("mytopic").await;
-        pubsub.publish("mytopic", &String::from("test")).await?;
+        let subscriber = pubsub.create_subscriber();
+        subscriber.subscribe_to("mytopic");
+        pubsub.publish("mytopic", &String::from("test"))?;
         let receiver = subscriber.receiver().clone();
         let message = receiver.recv_async().await.expect("No message received");
         assert_eq!(message.topic, "mytopic");
@@ -380,27 +368,27 @@ mod tests {
     #[tokio::test]
     async fn multiple_subscribers_test() -> anyhow::Result<()> {
         let pubsub = Relay::default();
-        let subscriber_a = pubsub.create_subscriber().await;
-        let subscriber_ab = pubsub.create_subscriber().await;
-        subscriber_a.subscribe_to("a").await;
-        subscriber_ab.subscribe_to("a").await;
-        subscriber_ab.subscribe_to("b").await;
+        let subscriber_a = pubsub.create_subscriber();
+        let subscriber_ab = pubsub.create_subscriber();
+        subscriber_a.subscribe_to("a");
+        subscriber_ab.subscribe_to("a");
+        subscriber_ab.subscribe_to("b");
 
-        pubsub.publish("a", &String::from("a1")).await?;
-        pubsub.publish("b", &String::from("b1")).await?;
-        pubsub.publish("a", &String::from("a2")).await?;
+        pubsub.publish("a", &String::from("a1"))?;
+        pubsub.publish("b", &String::from("b1"))?;
+        pubsub.publish("a", &String::from("a2"))?;
 
         // Check subscriber_a for a1 and a2.
-        let message = subscriber_a.receiver().recv_async().await?;
+        let message = subscriber_a.receiver().recv()?;
         assert_eq!(message.payload::<String>()?, "a1");
-        let message = subscriber_a.receiver().recv_async().await?;
+        let message = subscriber_a.receiver().recv()?;
         assert_eq!(message.payload::<String>()?, "a2");
 
-        let message = subscriber_ab.receiver().recv_async().await?;
+        let message = subscriber_ab.receiver().recv()?;
         assert_eq!(message.payload::<String>()?, "a1");
-        let message = subscriber_ab.receiver().recv_async().await?;
+        let message = subscriber_ab.receiver().recv()?;
         assert_eq!(message.payload::<String>()?, "b1");
-        let message = subscriber_ab.receiver().recv_async().await?;
+        let message = subscriber_ab.receiver().recv()?;
         assert_eq!(message.payload::<String>()?, "a2");
 
         Ok(())
@@ -409,19 +397,19 @@ mod tests {
     #[tokio::test]
     async fn unsubscribe_test() -> anyhow::Result<()> {
         let pubsub = Relay::default();
-        let subscriber = pubsub.create_subscriber().await;
-        subscriber.subscribe_to("a").await;
+        let subscriber = pubsub.create_subscriber();
+        subscriber.subscribe_to("a");
 
-        pubsub.publish("a", &String::from("a1")).await?;
-        subscriber.unsubscribe_from("a").await;
-        pubsub.publish("a", &String::from("a2")).await?;
-        subscriber.subscribe_to("a").await;
-        pubsub.publish("a", &String::from("a3")).await?;
+        pubsub.publish("a", &String::from("a1"))?;
+        subscriber.unsubscribe_from("a");
+        pubsub.publish("a", &String::from("a2"))?;
+        subscriber.subscribe_to("a");
+        pubsub.publish("a", &String::from("a3"))?;
 
         // Check subscriber_a for a1 and a2.
-        let message = subscriber.receiver().recv_async().await?;
+        let message = subscriber.receiver().recv()?;
         assert_eq!(message.payload::<String>()?, "a1");
-        let message = subscriber.receiver().recv_async().await?;
+        let message = subscriber.receiver().recv()?;
         assert_eq!(message.payload::<String>()?, "a3");
 
         Ok(())
@@ -430,26 +418,26 @@ mod tests {
     #[tokio::test]
     async fn drop_and_send_test() -> anyhow::Result<()> {
         let pubsub = Relay::default();
-        let subscriber_a = pubsub.create_subscriber().await;
-        let subscriber_to_drop = pubsub.create_subscriber().await;
-        subscriber_a.subscribe_to("a").await;
-        subscriber_to_drop.subscribe_to("a").await;
+        let subscriber_a = pubsub.create_subscriber();
+        let subscriber_to_drop = pubsub.create_subscriber();
+        subscriber_a.subscribe_to("a");
+        subscriber_to_drop.subscribe_to("a");
 
-        pubsub.publish("a", &String::from("a1")).await?;
+        pubsub.publish("a", &String::from("a1"))?;
         drop(subscriber_to_drop);
-        pubsub.publish("a", &String::from("a2")).await?;
+        pubsub.publish("a", &String::from("a2"))?;
 
         // Check subscriber_a for a1 and a2.
-        let message = subscriber_a.receiver().recv_async().await?;
+        let message = subscriber_a.receiver().recv()?;
         assert_eq!(message.payload::<String>()?, "a1");
-        let message = subscriber_a.receiver().recv_async().await?;
+        let message = subscriber_a.receiver().recv()?;
         assert_eq!(message.payload::<String>()?, "a2");
 
-        let subscribers = pubsub.data.subscribers.read().await;
+        let subscribers = pubsub.data.subscribers.read();
         assert_eq!(subscribers.len(), 1);
-        let topics = pubsub.data.topics.read().await;
+        let topics = pubsub.data.topics.read();
         let topic_id = topics.get("a").expect("topic not found");
-        let subscriptions = pubsub.data.subscriptions.read().await;
+        let subscriptions = pubsub.data.subscriptions.read();
         assert_eq!(
             subscriptions
                 .get(topic_id)
@@ -464,17 +452,15 @@ mod tests {
     #[tokio::test]
     async fn drop_cleanup_test() -> anyhow::Result<()> {
         let pubsub = Relay::default();
-        let subscriber = pubsub.create_subscriber().await;
-        subscriber.subscribe_to("a").await;
+        let subscriber = pubsub.create_subscriber();
+        subscriber.subscribe_to("a");
         drop(subscriber);
-        // Drop spawns a task that cleans up. Give it a moment to execute.
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
 
-        let subscribers = pubsub.data.subscribers.read().await;
+        let subscribers = pubsub.data.subscribers.read();
         assert_eq!(subscribers.len(), 0);
-        let subscriptions = pubsub.data.subscriptions.read().await;
+        let subscriptions = pubsub.data.subscriptions.read();
         assert_eq!(subscriptions.len(), 0);
-        let topics = pubsub.data.topics.read().await;
+        let topics = pubsub.data.topics.read();
         assert_eq!(topics.len(), 0);
 
         Ok(())

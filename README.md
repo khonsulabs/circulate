@@ -4,19 +4,42 @@
 [![Live Build Status](https://img.shields.io/github/workflow/status/khonsulabs/circulate/Tests/main)](https://github.com/khonsulabs/circulate/actions?query=workflow:Tests)
 [![Documentation for `main` branch](https://img.shields.io/badge/docs-main-informational)](https://khonsulabs.github.io/circulate/main/circulate/)
 
-Circulate is a lightweight async [PubSub](https://en.wikipedia.org/wiki/Publish%E2%80%93subscribe_pattern) framework. It currently requires tokio.
+Circulate is a lightweight
+[PubSub](https://en.wikipedia.org/wiki/Publish%E2%80%93subscribe_pattern)
+framework that supports both async and non-async code. This project is written
+for [BonsaiDb](https://github.com/khonsulabs/bonsaidb). While BonsaiDb's async
+relies upon tokio, this crate is runtime agnostic thanks to the excellent crate
+[flume](https://github.com/zesterer/flume).
 
-This project is written for [BonsaiDb](https://github.com/khonsulabs/bonsaidb). However, it's a general-purpose PubSub implementation that can be utilized in any tokio-based Rust codebase.
+## Async Example
 
 ```rust
 let relay = Relay::default();
-let subscriber = relay.create_subscriber().await;
+let subscriber = relay.create_subscriber();
 
-subscriber.subscribe_to("some topic").await;
+subscriber.subscribe_to("some topic");
 
-relay.publish("some topic", &AnySerializableType).await?;
+relay.publish("some topic", &AnySerializableType)?;
 
 let message = subscriber.receiver().recv_async().await?;
+println!(
+    "Received message on topic {}: {:?}",
+    message.topic, 
+    message.payload::<AnySerializableType>()?
+);
+```
+
+## Sync Example
+
+```rust
+let relay = Relay::default();
+let subscriber = relay.create_subscriber();
+
+subscriber.subscribe_to("some topic");
+
+relay.publish("some topic", &AnySerializableType)?;
+
+let message = subscriber.receiver().recv()?;
 println!(
     "Received message on topic {}: {:?}",
     message.topic, 

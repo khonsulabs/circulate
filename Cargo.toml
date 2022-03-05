@@ -3,7 +3,7 @@ name = "circulate"
 version = "0.2.1"
 authors = ["Jonathan Johnson <jon@khonsulabs.com>"]
 edition = "2021"
-description = "Lightweight async PubSub framework."
+description = "Lightweight PubSub framework that supports both sync and async"
 repository = "https://github.com/khonsulabs/circulate"
 license = "MIT OR Apache-2.0"
 keywords = ["pubsub"]
@@ -15,14 +15,8 @@ flume = "0.10.11"
 serde = { version = "1.0.136", features = ["derive"] }
 pot = "1.0.1"
 futures = "0.3.21"
-async-lock = "2.5.0"
+parking_lot = "0.12.0"
 arc-bytes = "0.3.3"
-
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-bindgen-futures = "0.4.29"
-
-[target.'cfg(not(target_arch="wasm32"))'.dependencies]
-tokio = { version = "1.16.0", features = ["sync", "macros", "rt"] }
 
 [dev-dependencies]
 anyhow = "1.0.55"
