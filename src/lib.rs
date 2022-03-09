@@ -146,11 +146,7 @@ impl Relay {
     }
 
     /// Publishes a `payload` to all subscribers of `topic`.
-    pub async fn publish_raw_to_all(
-        &self,
-        topics: Vec<String>,
-        payload: impl Into<OwnedBytes> + Send,
-    ) {
+    pub fn publish_raw_to_all(&self, topics: Vec<String>, payload: impl Into<OwnedBytes> + Send) {
         let payload = payload.into();
         for topic in topics {
             self.publish_message(Message {
