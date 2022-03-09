@@ -464,10 +464,6 @@
 <span id="462">462</span>
 <span id="463">463</span>
 <span id="464">464</span>
-<span id="465">465</span>
-<span id="466">466</span>
-<span id="467">467</span>
-<span id="468">468</span>
 </pre><pre class="rust"><code><span class="attribute">#![<span class="ident">doc</span> <span class="op">=</span> <span class="macro">include_str!</span>(<span class="string">&quot;../.rustme/docs.md&quot;</span>)]</span>
 <span class="attribute">#![<span class="ident">forbid</span>(<span class="ident">unsafe_code</span>)]</span>
 <span class="attribute">#![<span class="ident">warn</span>(
@@ -616,11 +612,7 @@
     }
 
     <span class="doccomment">/// Publishes a `payload` to all subscribers of `topic`.</span>
-    <span class="kw">pub</span> <span class="kw">async</span> <span class="kw">fn</span> <span class="ident">publish_raw_to_all</span>(
-        <span class="kw-2">&amp;</span><span class="self">self</span>,
-        <span class="ident">topics</span>: <span class="ident">Vec</span><span class="op">&lt;</span><span class="ident">String</span><span class="op">&gt;</span>,
-        <span class="ident">payload</span>: <span class="kw">impl</span> <span class="ident">Into</span><span class="op">&lt;</span><span class="ident">OwnedBytes</span><span class="op">&gt;</span> <span class="op">+</span> <span class="ident">Send</span>,
-    ) {
+    <span class="kw">pub</span> <span class="kw">fn</span> <span class="ident">publish_raw_to_all</span>(<span class="kw-2">&amp;</span><span class="self">self</span>, <span class="ident">topics</span>: <span class="ident">Vec</span><span class="op">&lt;</span><span class="ident">String</span><span class="op">&gt;</span>, <span class="ident">payload</span>: <span class="kw">impl</span> <span class="ident">Into</span><span class="op">&lt;</span><span class="ident">OwnedBytes</span><span class="op">&gt;</span> <span class="op">+</span> <span class="ident">Send</span>) {
         <span class="kw">let</span> <span class="ident">payload</span> <span class="op">=</span> <span class="ident">payload</span>.<span class="ident">into</span>();
         <span class="kw">for</span> <span class="ident">topic</span> <span class="kw">in</span> <span class="ident">topics</span> {
             <span class="self">self</span>.<span class="ident">publish_message</span>(<span class="ident">Message</span> {
