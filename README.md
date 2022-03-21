@@ -17,14 +17,14 @@ relies upon tokio, this crate is runtime agnostic thanks to the excellent crate
 let relay = Relay::default();
 let subscriber = relay.create_subscriber();
 
-subscriber.subscribe_to("some topic");
+subscriber.subscribe_to(&"some topic")?;
 
-relay.publish("some topic", &AnySerializableType)?;
+relay.publish(&"some topic", &AnySerializableType)?;
 
 let message = subscriber.receiver().recv_async().await?;
 println!(
     "Received message on topic {}: {:?}",
-    message.topic, 
+    message.topic::<String>()?, 
     message.payload::<AnySerializableType>()?
 );
 ```
@@ -35,14 +35,14 @@ println!(
 let relay = Relay::default();
 let subscriber = relay.create_subscriber();
 
-subscriber.subscribe_to("some topic");
+subscriber.subscribe_to(&"some topic")?;
 
-relay.publish("some topic", &AnySerializableType)?;
+relay.publish(&"some topic", &AnySerializableType)?;
 
 let message = subscriber.receiver().recv()?;
 println!(
     "Received message on topic {}: {:?}",
-    message.topic, 
+    message.topic::<String>()?, 
     message.payload::<AnySerializableType>()?
 );
 ```

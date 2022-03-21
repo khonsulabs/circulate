@@ -7,7 +7,7 @@ fn main() -> anyhow::Result<()> {
 
     let subscriber = relay.create_subscriber();
     // Subscribe for messages sent to the topic "pong"
-    subscriber.subscribe_to("pong");
+    subscriber.subscribe_to(&"pong")?;
 
     // Launch a task that sends out "ping" messages.
     let pinger_relay = relay.clone();
@@ -22,7 +22,8 @@ fn main() -> anyhow::Result<()> {
         let pings_remaining = message.payload::<usize>()?;
         println!(
             "<-- Received {}, pings remaining: {}",
-            message.topic, pings_remaining
+            message.topic::<String>()?,
+            pings_remaining
         );
         if pings_remaining == 0 {
             break;
@@ -39,7 +40,7 @@ fn pinger(pubsub: Relay) -> anyhow::Result<()> {
     loop {
         ping_count += 1;
         println!("-> Sending ping {}", ping_count);
-        pubsub.publish("ping", &ping_count)?;
+        pubsub.publish(&"ping", &ping_count)?;
         sleep(Duration::from_millis(250));
     }
 }
@@ -47,7 +48,7 @@ fn pinger(pubsub: Relay) -> anyhow::Result<()> {
 fn ponger(pubsub: Relay) -> anyhow::Result<()> {
     const NUMBER_OF_PONGS: usize = 5;
     let subscriber = pubsub.create_subscriber();
-    subscriber.subscribe_to("ping");
+    subscriber.subscribe_to(&"ping")?;
     let mut pings_remaining = NUMBER_OF_PONGS;
 
     println!(
@@ -59,11 +60,11 @@ fn ponger(pubsub: Relay) -> anyhow::Result<()> {
         let message = subscriber.receiver().recv()?;
         println!(
             "<- Received {}, id {}",
-            message.topic,
+            message.topic::<String>()?,
             message.payload::<u32>()?
         );
         pings_remaining -= 1;
-        pubsub.publish("pong", &pings_remaining)?;
+        pubsub.publish(&"pong", &pings_remaining)?;
     }
 
     println!("Ponger finished.");

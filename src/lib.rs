@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Message {
     /// The topic of the message.
-    pub topic: String,
+    pub topic: OwnedBytes,
     /// The payload of the message.
     pub payload: OwnedBytes,
 }
@@ -40,24 +40,36 @@ impl Message {
     /// # Errors
     ///
     /// Returns an error if `payload` fails to serialize with `pot`.
-    pub fn new<S: Into<String>, P: Serialize>(topic: S, payload: &P) -> Result<Self, pot::Error> {
-        Ok(Self::raw(topic, pot::to_vec(payload)?))
+    pub fn new<Topic: Serialize, Payload: Serialize>(
+        topic: &Topic,
+        payload: &Payload,
+    ) -> Result<Self, pot::Error> {
+        Ok(Self::raw(pot::to_vec(topic)?, pot::to_vec(payload)?))
     }
 
     /// Creates a new message with a raw payload.
-    pub fn raw<S: Into<String>, B: Into<OwnedBytes>>(topic: S, payload: B) -> Self {
+    pub fn raw<S: Into<OwnedBytes>, B: Into<OwnedBytes>>(topic: S, payload: B) -> Self {
         Self {
             topic: topic.into(),
             payload: payload.into(),
         }
     }
 
-    /// Deserialize the payload as `P` using `pot`.
+    /// Deserialize the topic as `Topic` using `pot`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `topic` fails to deserialize with `pot`.
+    pub fn topic<'a, Topic: Deserialize<'a>>(&'a self) -> Result<Topic, pot::Error> {
+        pot::from_slice(&self.topic).map_err(pot::Error::from)
+    }
+
+    /// Deserialize the payload as `Payload` using `pot`.
     ///
     /// # Errors
     ///
     /// Returns an error if `payload` fails to deserialize with `pot`.
-    pub fn payload<'a, P: Deserialize<'a>>(&'a self) -> Result<P, pot::Error> {
+    pub fn payload<'a, Payload: Deserialize<'a>>(&'a self) -> Result<Payload, pot::Error> {
         pot::from_slice(&self.payload).map_err(pot::Error::from)
     }
 }
@@ -74,7 +86,7 @@ pub struct Relay {
 #[derive(Debug, Default)]
 struct Data {
     subscribers: RwLock<HashMap<SubscriberId, SubscriberInfo>>,
-    topics: RwLock<HashMap<String, TopicId>>,
+    topics: RwLock<HashMap<OwnedBytes, TopicId>>,
     subscriptions: RwLock<HashMap<TopicId, HashSet<SubscriberId>>>,
     last_topic_id: AtomicU64,
     last_subscriber_id: AtomicU64,
@@ -106,50 +118,59 @@ impl Relay {
     ///
     /// # Errors
     ///
-    /// Returns an error if `payload` fails to serialize with `pot`.
-    pub fn publish<S: Into<String> + Send, P: Serialize + Sync>(
+    /// Returns an error if `topic` or `payload` fails to serialize with `pot`.
+    pub fn publish<Topic: Serialize, P: Serialize>(
         &self,
-        topic: S,
+        topic: &Topic,
         payload: &P,
     ) -> Result<(), pot::Error> {
         let message = Message::new(topic, payload)?;
-        self.publish_message(message);
+        self.publish_message(&message);
         Ok(())
     }
 
     /// Publishes a `payload` to all subscribers of `topic`.
-    pub fn publish_raw<S: Into<String> + Send, P: Into<OwnedBytes> + Send>(
+    pub fn publish_raw<Topic: Into<OwnedBytes>, Payload: Into<OwnedBytes>>(
         &self,
-        topic: S,
-        payload: P,
+        topic: Topic,
+        payload: Payload,
     ) {
         let message = Message::raw(topic, payload);
-        self.publish_message(message);
+        self.publish_message(&message);
     }
 
     /// Publishes a `payload` to all subscribers of `topic`.
     ///
     /// # Errors
     ///
-    /// Returns an error if `payload` fails to serialize with `pot`.
-    pub fn publish_to_all<P: Serialize + Sync>(
+    /// Returns an error if `topics` or `payload` fail to serialize with `pot`.
+    pub fn publish_to_all<
+        'topics,
+        Topics: IntoIterator<Item = &'topics Topic> + 'topics,
+        Topic: Serialize + 'topics,
+        Payload: Serialize,
+    >(
         &self,
-        topics: Vec<String>,
-        payload: &P,
+        topics: Topics,
+        payload: &Payload,
     ) -> Result<(), pot::Error> {
-        topics
-            .into_iter()
-            .map(|topic| Message::new(topic, payload).map(|message| self.publish_message(message)))
-            .collect::<Result<Vec<_>, _>>()?;
+        for topic in topics {
+            let message = Message::new(topic, payload)?;
+            self.publish_message(&message);
+        }
 
         Ok(())
     }
 
     /// Publishes a `payload` to all subscribers of `topic`.
-    pub fn publish_raw_to_all(&self, topics: Vec<String>, payload: impl Into<OwnedBytes> + Send) {
+    pub fn publish_raw_to_all(
+        &self,
+        topics: impl IntoIterator<Item = OwnedBytes>,
+        payload: impl Into<OwnedBytes>,
+    ) {
         let payload = payload.into();
         for topic in topics {
-            self.publish_message(Message {
+            self.publish_message(&Message {
                 topic,
                 payload: payload.clone(),
             });
@@ -157,13 +178,13 @@ impl Relay {
     }
 
     /// Publishes a message to all subscribers of its topic.
-    pub fn publish_message(&self, message: Message) {
+    pub fn publish_message(&self, message: &Message) {
         if let Some(topic_id) = self.topic_id(&message.topic) {
             self.post_message_to_topic(message, topic_id);
         }
     }
 
-    fn add_subscriber_to_topic(&self, subscriber_id: u64, topic: String) {
+    fn add_subscriber_to_topic(&self, subscriber_id: u64, topic: OwnedBytes) {
         let mut subscribers = self.data.subscribers.write();
         let mut topics = self.data.topics.write();
         let mut subscriptions = self.data.subscriptions.write();
@@ -181,7 +202,7 @@ impl Relay {
         subscribers.insert(subscriber_id);
     }
 
-    fn remove_subscriber_from_topic(&self, subscriber_id: u64, topic: &str) {
+    fn remove_subscriber_from_topic(&self, subscriber_id: u64, topic: &[u8]) {
         let mut subscribers = self.data.subscribers.write();
         let mut topics = self.data.topics.write();
 
@@ -219,12 +240,12 @@ impl Relay {
         }
     }
 
-    fn topic_id(&self, topic: &str) -> Option<TopicId> {
+    fn topic_id(&self, topic: &[u8]) -> Option<TopicId> {
         let topics = self.data.topics.read();
         topics.get(topic).copied()
     }
 
-    fn post_message_to_topic(&self, message: Message, topic: TopicId) {
+    fn post_message_to_topic(&self, message: &Message, topic: TopicId) {
         let failures = {
             // For an optimal-flow case, we're going to acquire read permissions
             // only, allowing messages to be posted in parallel. This block is
@@ -232,7 +253,6 @@ impl Relay {
             let subscribers = self.data.subscribers.read();
             let subscriptions = self.data.subscriptions.read();
             if let Some(registered) = subscriptions.get(&topic) {
-                let message = Arc::new(message);
                 let failures = registered
                     .iter()
                     .filter_map(|id| {
@@ -284,7 +304,7 @@ impl Relay {
 
 #[derive(Debug)]
 struct SubscriberInfo {
-    sender: flume::Sender<Arc<Message>>,
+    sender: flume::Sender<Message>,
     topics: HashSet<u64>,
 }
 
@@ -297,14 +317,36 @@ pub struct Subscriber {
 
 impl Subscriber {
     /// Subscribe to [`Message`]s published to `topic`.
-    pub fn subscribe_to<S: Into<String> + Send>(&self, topic: S) {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `topic` fails to serialize with `pot`.
+    pub fn subscribe_to<Topic: Serialize>(&self, topic: &Topic) -> Result<(), pot::Error> {
+        let topic = pot::to_vec(topic)?;
+        self.subscribe_to_raw(topic);
+        Ok(())
+    }
+
+    /// Subscribe to [`Message`]s published to `topic`.
+    pub fn subscribe_to_raw(&self, topic: impl Into<OwnedBytes>) {
         self.data
             .relay
             .add_subscriber_to_topic(self.data.id, topic.into());
     }
 
     /// Unsubscribe from [`Message`]s published to `topic`.
-    pub fn unsubscribe_from(&self, topic: &str) {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `topic` fails to serialize with `pot`.
+    pub fn unsubscribe_from<Topic: Serialize>(&self, topic: &Topic) -> Result<(), pot::Error> {
+        let topic = pot::to_vec(topic)?;
+        self.unsubscribe_from_raw(&topic);
+        Ok(())
+    }
+
+    /// Unsubscribe from [`Message`]s published to `topic`.
+    pub fn unsubscribe_from_raw(&self, topic: &[u8]) {
         self.data
             .relay
             .remove_subscriber_from_topic(self.data.id, topic);
@@ -312,7 +354,7 @@ impl Subscriber {
 
     /// Returns the receiver to receive [`Message`]s.
     #[must_use]
-    pub fn receiver(&self) -> &'_ flume::Receiver<Arc<Message>> {
+    pub fn receiver(&self) -> &'_ flume::Receiver<Message> {
         &self.data.receiver
     }
 
@@ -327,7 +369,7 @@ impl Subscriber {
 struct SubscriberData {
     id: SubscriberId,
     relay: Relay,
-    receiver: flume::Receiver<Arc<Message>>,
+    receiver: flume::Receiver<Message>,
 }
 
 impl Drop for SubscriberData {
@@ -344,11 +386,11 @@ mod tests {
     async fn simple_pubsub_test() -> anyhow::Result<()> {
         let pubsub = Relay::default();
         let subscriber = pubsub.create_subscriber();
-        subscriber.subscribe_to("mytopic");
-        pubsub.publish("mytopic", &String::from("test"))?;
+        subscriber.subscribe_to(&"mytopic")?;
+        pubsub.publish(&"mytopic", &String::from("test"))?;
         let receiver = subscriber.receiver().clone();
         let message = receiver.recv_async().await.expect("No message received");
-        assert_eq!(message.topic, "mytopic");
+        assert_eq!(message.topic::<String>()?, "mytopic");
         assert_eq!(message.payload::<String>()?, "test");
         // The message should only be received once.
         assert!(matches!(
@@ -366,13 +408,13 @@ mod tests {
         let pubsub = Relay::default();
         let subscriber_a = pubsub.create_subscriber();
         let subscriber_ab = pubsub.create_subscriber();
-        subscriber_a.subscribe_to("a");
-        subscriber_ab.subscribe_to("a");
-        subscriber_ab.subscribe_to("b");
+        subscriber_a.subscribe_to(&"a")?;
+        subscriber_ab.subscribe_to(&"a")?;
+        subscriber_ab.subscribe_to(&"b")?;
 
-        pubsub.publish("a", &String::from("a1"))?;
-        pubsub.publish("b", &String::from("b1"))?;
-        pubsub.publish("a", &String::from("a2"))?;
+        pubsub.publish(&"a", &String::from("a1"))?;
+        pubsub.publish(&"b", &String::from("b1"))?;
+        pubsub.publish(&"a", &String::from("a2"))?;
 
         // Check subscriber_a for a1 and a2.
         let message = subscriber_a.receiver().recv()?;
@@ -394,13 +436,13 @@ mod tests {
     async fn unsubscribe_test() -> anyhow::Result<()> {
         let pubsub = Relay::default();
         let subscriber = pubsub.create_subscriber();
-        subscriber.subscribe_to("a");
+        subscriber.subscribe_to(&"a")?;
 
-        pubsub.publish("a", &String::from("a1"))?;
-        subscriber.unsubscribe_from("a");
-        pubsub.publish("a", &String::from("a2"))?;
-        subscriber.subscribe_to("a");
-        pubsub.publish("a", &String::from("a3"))?;
+        pubsub.publish(&"a", &String::from("a1"))?;
+        subscriber.unsubscribe_from(&"a")?;
+        pubsub.publish(&"a", &String::from("a2"))?;
+        subscriber.subscribe_to(&"a")?;
+        pubsub.publish(&"a", &String::from("a3"))?;
 
         // Check subscriber_a for a1 and a2.
         let message = subscriber.receiver().recv()?;
@@ -416,12 +458,12 @@ mod tests {
         let pubsub = Relay::default();
         let subscriber_a = pubsub.create_subscriber();
         let subscriber_to_drop = pubsub.create_subscriber();
-        subscriber_a.subscribe_to("a");
-        subscriber_to_drop.subscribe_to("a");
+        subscriber_a.subscribe_to(&"a")?;
+        subscriber_to_drop.subscribe_to(&"a")?;
 
-        pubsub.publish("a", &String::from("a1"))?;
+        pubsub.publish(&"a", &String::from("a1"))?;
         drop(subscriber_to_drop);
-        pubsub.publish("a", &String::from("a2"))?;
+        pubsub.publish(&"a", &String::from("a2"))?;
 
         // Check subscriber_a for a1 and a2.
         let message = subscriber_a.receiver().recv()?;
@@ -432,7 +474,7 @@ mod tests {
         let subscribers = pubsub.data.subscribers.read();
         assert_eq!(subscribers.len(), 1);
         let topics = pubsub.data.topics.read();
-        let topic_id = topics.get("a").expect("topic not found");
+        let topic_id = topics.values().next().expect("topic not found");
         let subscriptions = pubsub.data.subscriptions.read();
         assert_eq!(
             subscriptions
@@ -449,7 +491,7 @@ mod tests {
     async fn drop_cleanup_test() -> anyhow::Result<()> {
         let pubsub = Relay::default();
         let subscriber = pubsub.create_subscriber();
-        subscriber.subscribe_to("a");
+        subscriber.subscribe_to(&"a")?;
         drop(subscriber);
 
         let subscribers = pubsub.data.subscribers.read();
