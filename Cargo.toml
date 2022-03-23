@@ -1,6 +1,6 @@
 [package]
 name = "circulate"
-version = "0.2.1"
+version = "0.3.0"
 authors = ["Jonathan Johnson <jon@khonsulabs.com>"]
 edition = "2021"
 description = "Lightweight PubSub framework that supports both sync and async"
