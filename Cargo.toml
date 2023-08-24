@@ -1,6 +1,6 @@
 [package]
 name = "circulate"
-version = "0.4.0"
+version = "0.5.0"
 authors = ["Jonathan Johnson <jon@khonsulabs.com>"]
 edition = "2021"
 description = "Lightweight PubSub framework that supports both sync and async"
@@ -11,9 +11,9 @@ categories = ["asynchronous"]
 readme = "./README.md"
 
 [dependencies]
-flume = "0.10.11"
+flume = { version = "0.11", default-features = false, features = ["async"] }
 serde = { version = "1.0.136", features = ["derive"] }
-pot = "2.0.0"
+pot = "3.0.0"
 futures = "0.3.21"
 parking_lot = "0.12.0"
 arc-bytes = "0.3.3"
